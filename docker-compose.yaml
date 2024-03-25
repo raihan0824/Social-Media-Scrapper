@@ -1,0 +1,9 @@
+version: '3.3'
+services:
+  socmed-scraper:
+    container_name: socmed-scraper
+    build: ./
+    restart: always
+    ports:
+      - ${PORT_SCRAPER}:5001
+    

@@ -1,0 +1,12 @@
+requests
+fastapi[all]
+pandas
+pydantic
+decorator
+requests
+psycopg2-binary
+python-dotenv
+uvicorn
+playwright
+httpx
+bs4==0.0.1
