@@ -193,3 +193,54 @@ def scrape_youtube(url: str):
         }
 
     return output
+
+@scraping_router.get("/api/v1/scrape-tripadvisor")
+async def scrape_ta(url: str):
+    parsed_url = urlparse(url)
+    if parsed_url.netloc.endswith(".com"):
+        new_netloc = parsed_url.netloc.replace(".com", ".co.id")
+        url = urlunparse(parsed_url._replace(netloc=new_netloc))
+    about = {}
+    async with async_playwright() as pw:
+        browser = await pw.firefox.launch(headless=True)
+        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await context.new_page()
+        # page.on("response", intercept_response)
+        await page.goto(url)
+        await page.wait_for_selector("[data-test-target='restaurant-detail-info']",timeout=15000)
+        page_content = await page.content()
+        soup = BeautifulSoup(page_content, 'html.parser')
+    
+        restaurant_detail = soup.find("div",attrs={"data-test-target":"restaurant-detail-info"})
+        title = restaurant_detail.find("h1").get_text()
+        review_cards = soup.findAll("div",attrs={"class":"reviewSelector"})
+        reviews=[]
+        for review_card in review_cards:
+            review = review_card.find("p",attrs={"class":"partial_entry"})
+            reviews.append(review.get_text())
+        
+        rating_and_reviews_section = soup.find(text="Penilaian dan ulasan")
+        if rating_and_reviews_section:
+            rating_and_reviews = rating_and_reviews_section.find_previous('div').find_previous('div').get_text(separator=" ")
+            rating = rating_and_reviews.split("ulasan")[1].strip().split(" ")[0]
+            n_reviews = rating_and_reviews.split("ulasan")[1].strip().split("ulasan")[0].split(" ")[2]
+            # Regex pattern to find the numbers before and after "dari"
+            pattern = r"(\d+(?:\.\d+)?)\s+dari\s+(\d+(?:\.\d+)?)"
+            match = re.search(pattern, rating_and_reviews)
+            if match:
+                ranking = match.group(1)
+                of_total = match.group(2)
+        else:
+            rating_and_reviews = "No rating and reviews section found"
+        
+        about["reviews"] = reviews
+        output = {
+            "rating":rating,
+            "n_reviews":n_reviews,
+            "ranking":ranking,
+            "of_total":of_total,
+            "title":title,
+            "about":about,
+            "url":url
+        }
+        return output
