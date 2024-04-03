@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /opt/app
 
 # Install system dependencies required by Playwright
-RUN apt-get update && apt-get install -y wget unzip libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxss1 libxtst6 libnss3 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libgtk-3-0
+RUN apt-get update && apt-get install -y wget unzip libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxss1 libxtst6 libnss3 libasound2 libatk1.0-0 libdbus-glib-1.so.2 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libgtk-3-0
 
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
