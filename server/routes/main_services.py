@@ -66,7 +66,7 @@ def scrape_ig(url: str):
     response = requests.get(url)
     # Parse the HTML content with BeautifulSoup
     soup = BeautifulSoup(response.text, 'html.parser')
-
+    print(soup)
     # Validate if the post private or not
     temp_url = soup.find('meta', attrs={'property': 'og:url'}).get('content')
     if 'https://www.instagram.com/p/' not in temp_url:
