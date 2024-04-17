@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter
+from fastapi import APIRouter,status,HTTPException
 import warnings 
 import requests
 import logging
@@ -67,6 +67,14 @@ def scrape_ig(url: str):
     # Parse the HTML content with BeautifulSoup
     soup = BeautifulSoup(response.text, 'html.parser')
 
+    # Validate if the post private or not
+    temp_url = soup.find('meta', attrs={'property': 'og:url'}).get('content')
+    if 'https://www.instagram.com/p/' not in temp_url:
+        raise HTTPException(
+            status_code = status.HTTP_403_FORBIDDEN,
+            detail = 'The post is on a private user.'
+        )
+    
     description_meta = soup.find('meta', attrs={'property': 'og:title'})
     if description_meta:
         description_content = description_meta.get('content')
@@ -202,15 +210,14 @@ async def scrape_ta(url: str):
         url = urlunparse(parsed_url._replace(netloc=new_netloc))
     about = {}
     async with async_playwright() as pw:
-        browser = await pw.firefox.launch(headless=True)
+        browser = await pw.firefox.launch(headless=False)
         context = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await context.new_page()
         # page.on("response", intercept_response)
         await page.goto(url)
-        await page.wait_for_selector("[data-test-target='restaurant-detail-info']",timeout=15000)
+        await page.wait_for_selector("[data-test-target='restaurant-detail-info']",timeout=10000)
         page_content = await page.content()
         soup = BeautifulSoup(page_content, 'html.parser')
-    
         restaurant_detail = soup.find("div",attrs={"data-test-target":"restaurant-detail-info"})
         title = restaurant_detail.find("h1").get_text()
         review_cards = soup.findAll("div",attrs={"class":"reviewSelector"})
