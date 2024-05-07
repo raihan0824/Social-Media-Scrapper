@@ -255,21 +255,21 @@ async def scrape_ta(url: str):
         return output
 
 @scraping_router.get("/api/v1/convert-facebook-url")
-def convert_fb_url(url: str):
+async def convert_fb_url(url: str):
     _xhr_calls = []
 
-    def intercept_response(response):
+    async def intercept_response(response):
         if response.request.resource_type == "xhr":
             _xhr_calls.append(response)
         return response
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = context.new_page()
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = await context.new_page()
         page.on("response", intercept_response)
-        page.goto(url)
-        page.wait_for_load_state('load')
+        await page.goto(url)
+        await page.wait_for_load_state('load')
         converted_url = page.url
         page.close()
         if "php" not in url:
@@ -280,24 +280,24 @@ def convert_fb_url(url: str):
     return {"url":final_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
-def scrape_facebook(url: str):
+async def scrape_facebook(url: str):
     if "php" in url:
         _xhr_calls = []
-        def intercept_response(response):
+        async def intercept_response(response):
             if response.request.resource_type == "xhr":
                 _xhr_calls.append(response)
             return response
 
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(viewport={"width": 1920, "height": 1080})
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
             page = context.new_page()
             page.on("response", intercept_response)
-            page.goto(url)
-            page.wait_for_load_state('load')
+            await page.goto(url)
+            await page.wait_for_load_state('load')
             # await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
             tweet_calls = [f for f in _xhr_calls if "https://www.facebook.com/ajax/bulk-route-definitions/" in f.url][0]
-            data_raw = tweet_calls.text()
+            data_raw = await tweet_calls.text()
             data = data_raw.split("for (;;);")[1]
             json_data = json.loads(data)
             first_key = next(iter(json_data['payload']['payloads']))
