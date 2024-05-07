@@ -260,12 +260,16 @@ def scrape_facebook(url: str):
     response = requests.get(url,headers=headers)
     # Parse the HTML content with BeautifulSoup
     soup = BeautifulSoup(response.text, 'html.parser')
-    if "redirecting" in soup.find("title").text.lower():
+    
+    redirect_count = 0
+    max_redirects = 3
+    while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
         redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
         url = redirect_url_raw.split("0;url=")[1]
-        response = requests.get(url,headers=headers)
-        # Parse the HTML content with BeautifulSoup
+        response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
+        redirect_count += 1
+
     username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
     if len(username.split("| By"))>1:
         username = username.split("| By")[1].strip()
