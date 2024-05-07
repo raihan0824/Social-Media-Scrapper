@@ -254,32 +254,58 @@ async def scrape_ta(url: str):
     
 @scraping_router.get("/api/v1/scrape-facebook")
 def scrape_facebook(url: str):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
-    }
-    response = requests.get(url,headers=headers)
-    # Parse the HTML content with BeautifulSoup
+    # Load cookies from a file
+    with open('cookies.json', 'r') as f:
+        cookies = json.load(f)
+
+    # Create a session object
+    session = requests.Session()
+    session.headers.update( {
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Accept-Encoding": "gzip,deflate",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+    })
+
+    # Add cookies to the session
+    for c in cookies:
+        expires = c.get("expirationDate") or c.get("Expires raw")
+        if expires:
+            expires = int(expires / 1000)
+            session.cookies.set(name=c['name'], 
+                                value=c['value'], 
+                                domain=c['domain'],
+                                secure=c["secure"],
+                                path=c["path"],
+                                expires=expires)
+
+    # Make the request using the session with cookies
+    response = session.get(url)
+
     soup = BeautifulSoup(response.text, 'html.parser')
     
     redirect_count = 0
     max_redirects = 3
     while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
         redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
-        url = redirect_url_raw.split("0;url=")[1]
-        response = requests.get(url, headers=headers)
+        new_url = redirect_url_raw.split("0;url=")[1]
+        response = session.get(new_url)
         soup = BeautifulSoup(response.text, 'html.parser')
         redirect_count += 1
 
+    with open('fb.html', 'w', encoding='utf-8') as file:
+        file.write(str(soup))
+
     username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
-    if len(username.split("| By"))>1:
+    if len(username.split("| By")) > 1:
         username = username.split("| By")[1].strip()
 
     content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
 
     output = {
-        "username":username,
-        "content":content,
-        "url":url
+        "username": username,
+        "content": content,
+        "url": url  # Use the final URL after redirects
     }
 
     return output
