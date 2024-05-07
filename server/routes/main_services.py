@@ -271,8 +271,10 @@ def convert_fb_url(url: str):
         page.goto(url)
         page.wait_for_load_state('load')
         converted_url = page.url
-    
-    return {"url":converted_url}
+        page.close()
+        parsed_url = urlparse(converted_url)
+        final_url = urlunparse(parsed_url._replace(query='', fragment=''))
+    return {"url":final_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 def scrape_facebook(url: str):
@@ -306,7 +308,7 @@ def scrape_facebook(url: str):
             output = {
                 "username":username,
                 "content":content,
-                "url":page.url
+                "url":url
             }
             return output
     else:
