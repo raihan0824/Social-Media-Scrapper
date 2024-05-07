@@ -251,3 +251,22 @@ async def scrape_ta(url: str):
             "url":url
         }
         return output
+    
+@scraping_router.get("/api/v1/scrape-facebook")
+def scrape_facebook(url: str):
+    response = requests.get(url)
+    # Parse the HTML content with BeautifulSoup
+    soup = BeautifulSoup(response.text, 'html.parser')
+    username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
+    if len(username.split("| By"))>1:
+        username = username.split("| By")[1].strip()
+
+    content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
+
+    output = {
+        "username":username,
+        "content":content,
+        "url":url
+    }
+
+    return output
