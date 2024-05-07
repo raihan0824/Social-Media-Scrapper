@@ -292,9 +292,8 @@ def scrape_facebook(url: str):
         response = session.get(new_url)
         soup = BeautifulSoup(response.text, 'html.parser')
         redirect_count += 1
-
-    with open('fb.html', 'w', encoding='utf-8') as file:
-        file.write(str(soup))
+    
+    print(soup)
 
     username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
     if len(username.split("| By")) > 1:
