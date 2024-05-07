@@ -269,10 +269,10 @@ def convert_fb_url(url: str):
         page = context.new_page()
         page.on("response", intercept_response)
         page.goto(url)
-        time.sleep(2)
+        page.wait_for_load_state('load')
         converted_url = page.url
     
-    return converted_url
+    return {"url":converted_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 def scrape_facebook(url: str):
