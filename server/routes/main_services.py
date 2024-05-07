@@ -5,9 +5,11 @@ import requests
 import logging
 import json
 from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 from server.utils.tools_ig import parse_url_ig
 from datetime import datetime
 import re
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse,urlunparse
 logger = logging.getLogger('Scraping-Log')
@@ -251,60 +253,89 @@ async def scrape_ta(url: str):
             "url":url
         }
         return output
+
+@scraping_router.get("/api/v1/convert-facebook-url")
+def convert_fb_url(url: str):
+    _xhr_calls = []
+
+    def intercept_response(response):
+        if response.request.resource_type == "xhr":
+            _xhr_calls.append(response)
+        return response
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 1920, "height": 1080})
+        page = context.new_page()
+        page.on("response", intercept_response)
+        page.goto(url)
+        time.sleep(2)
+        converted_url = page.url
+    
+    return converted_url
     
 @scraping_router.get("/api/v1/scrape-facebook")
 def scrape_facebook(url: str):
-    # Load cookies from a file
-    with open('cookies.json', 'r') as f:
-        cookies = json.load(f)
+    if "php" in url:
+        _xhr_calls = []
+        def intercept_response(response):
+            if response.request.resource_type == "xhr":
+                _xhr_calls.append(response)
+            return response
 
-    # Create a session object
-    session = requests.Session()
-    session.headers.update( {
-        "Accept": "*/*",
-        "Connection": "keep-alive",
-        "Accept-Encoding": "gzip,deflate",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
-    })
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(viewport={"width": 1920, "height": 1080})
+            page = context.new_page()
+            page.on("response", intercept_response)
+            page.goto(url)
+            page.wait_for_load_state('load')
+            # await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
+            tweet_calls = [f for f in _xhr_calls if "https://www.facebook.com/ajax/bulk-route-definitions/" in f.url][0]
+            data_raw = tweet_calls.text()
+            data = data_raw.split("for (;;);")[1]
+            json_data = json.loads(data)
+            first_key = next(iter(json_data['payload']['payloads']))
 
-    # Add cookies to the session
-    for c in cookies:
-        expires = c.get("expirationDate") or c.get("Expires raw")
-        if expires:
-            expires = int(expires / 1000)
-            session.cookies.set(name=c['name'], 
-                                value=c['value'], 
-                                domain=c['domain'],
-                                secure=c["secure"],
-                                path=c["path"],
-                                expires=expires)
-
-    # Make the request using the session with cookies
-    response = session.get(url)
-
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    redirect_count = 0
-    max_redirects = 3
-    while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
-        redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
-        new_url = redirect_url_raw.split("0;url=")[1]
-        response = session.get(new_url)
+            # Retrieve the data using the dynamic key
+            specific_data = json_data['payload']['payloads'][first_key]
+            parsed_data = specific_data["result"]["exports"]["meta"]["title"]
+            splitted_data = parsed_data.split("-")
+            username = splitted_data[0].strip()
+            content = splitted_data[1].strip()
+            output = {
+                "username":username,
+                "content":content,
+                "url":page.url
+            }
+            return output
+    else:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
+        }
+        response = requests.get(url,headers=headers)
+        # Parse the HTML content with BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
-        redirect_count += 1
-    
-    print(soup)
+        
+        redirect_count = 0
+        max_redirects = 3
+        while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
+            redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
+            url = redirect_url_raw.split("0;url=")[1]
+            response = requests.get(url, headers=headers)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            redirect_count += 1
 
-    username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
-    if len(username.split("| By")) > 1:
-        username = username.split("| By")[1].strip()
+        username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
+        if len(username.split("| By"))>1:
+            username = username.split("| By")[1].strip()
 
-    content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
+        content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
 
-    output = {
-        "username": username,
-        "content": content,
-        "url": url  # Use the final URL after redirects
-    }
+        output = {
+            "username":username,
+            "content":content,
+            "url":url
+        }
 
-    return output
+        return output
