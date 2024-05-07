@@ -256,20 +256,25 @@ async def scrape_ta(url: str):
 
 @scraping_router.get("/api/v1/convert-facebook-url")
 async def convert_fb_url(url: str):
-    _xhr_calls = []
-
-    async def intercept_response(response):
-        if response.request.resource_type == "xhr":
-            _xhr_calls.append(response)
-        return response
+    redirect_limit = 5  # Set a reasonable limit for redirects to avoid infinite loops
+    current_redirects = 0
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await context.new_page()
-        page.on("response", intercept_response)
-        await page.goto(url)
-        await page.wait_for_load_state('load')
+
+        while current_redirects < redirect_limit:
+            response = await page.goto(url, wait_until="networkidle")
+            if response.status() in [301, 302, 307, 308]:
+                url = response.headers()['location']  # Get the URL to redirect to
+                current_redirects += 1
+            else:
+                break  # Exit loop if the response is not a redirect
+
+        if current_redirects == redirect_limit:
+            print("Reached maximum redirect limit.")
+            return {"error": "Too many redirects"}
         converted_url = page.url
         page.close()
         if "php" not in url:
