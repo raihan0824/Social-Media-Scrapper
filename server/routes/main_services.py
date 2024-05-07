@@ -272,8 +272,11 @@ def convert_fb_url(url: str):
         page.wait_for_load_state('load')
         converted_url = page.url
         page.close()
-        parsed_url = urlparse(converted_url)
-        final_url = urlunparse(parsed_url._replace(query='', fragment=''))
+        if "php" not in url:
+            parsed_url = urlparse(converted_url)
+            final_url = urlunparse(parsed_url._replace(query='', fragment=''))
+        else:
+            final_url = converted_url
     return {"url":final_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
