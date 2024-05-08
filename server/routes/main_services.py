@@ -265,7 +265,7 @@ def convert_fb_url(url: str):
     'Cache-Control': 'max-age=0',
     'Connection': 'keep-alive',
 }
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers,verify=False)
     if response.status_code == 200:
         link_header = response.headers.get('Link')
         if link_header:
