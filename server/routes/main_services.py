@@ -255,34 +255,28 @@ async def scrape_ta(url: str):
         return output
 
 @scraping_router.get("/api/v1/convert-facebook-url")
-async def convert_fb_url(url: str):
-    redirect_limit = 5  # Set a reasonable limit for redirects to avoid infinite loops
-    current_redirects = 0
-
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await context.new_page()
-
-        while current_redirects < redirect_limit:
-            response = await page.goto(url, wait_until="networkidle")
-            if response.status() in [301, 302, 307, 308]:
-                url = response.headers()['location']  # Get the URL to redirect to
-                current_redirects += 1
+def convert_fb_url(url: str):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        link_header = response.headers.get('Link')
+        if link_header:
+            # Extract URL from the Link header
+            start = link_header.find('<') + 1
+            end = link_header.find('>')
+            converted_url = link_header[start:end]
+            if "php" not in url:
+                parsed_url = urlparse(converted_url)
+                final_url = urlunparse(parsed_url._replace(query='', fragment=''))
             else:
-                break  # Exit loop if the response is not a redirect
-
-        if current_redirects == redirect_limit:
-            print("Reached maximum redirect limit.")
-            return {"error": "Too many redirects"}
-        converted_url = page.url
-        page.close()
-        if "php" not in url:
-            parsed_url = urlparse(converted_url)
-            final_url = urlunparse(parsed_url._replace(query='', fragment=''))
+                final_url = converted_url
+            return {"url":final_url}
         else:
-            final_url = converted_url
-    return {"url":final_url}
+            return "No Link header found"
+    else:
+        return f"Failed to retrieve location, status code: {response.status_code}"
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
