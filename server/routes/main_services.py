@@ -285,6 +285,7 @@ def convert_fb_url(url: str):
                                 expires=expires)
 
     # Make the request using the session with cookies
+    session.max_redirects = 50
     response = session.get(url)
 
     if response.status_code == 200:
