@@ -289,6 +289,8 @@ def convert_fb_url(url: str):
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
+    with open("cookies.json", "r") as file:
+        cookies = json.load(file)
     if "php" in url:
         _xhr_calls = []
         async def intercept_response(response):
@@ -299,6 +301,7 @@ async def scrape_facebook(url: str):
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+            context.add_cookies(cookies)
             page = await context.new_page()
             page.on("response", intercept_response)
             await page.goto(url)
