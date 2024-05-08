@@ -265,47 +265,18 @@ def convert_fb_url(url: str):
     'Cache-Control': 'max-age=0',
     'Connection': 'keep-alive',
     }
-    with open('cookies.json', 'r') as f:
-        cookies = json.load(f)
-
-    # Create a session object
-    session = requests.Session()
-    session.headers.update(headers)
-
-    # Add cookies to the session
-    for c in cookies:
-        expires = c.get("expirationDate") or c.get("Expires raw")
-        if expires:
-            expires = int(expires / 1000)
-            session.cookies.set(name=c['name'], 
-                                value=c['value'], 
-                                domain=c['domain'],
-                                secure=c["secure"],
-                                path=c["path"],
-                                expires=expires)
-
-    # Make the request using the session with cookies
-    session.max_redirects = 50
-    response = session.get(url)
+    response = requests.get(f"http://httpbin.org/redirect-to?url={url}",headers=headers)
 
     if response.status_code == 200:
-        print("Response Headers:", ", ".join(response.headers.keys()))
-        link_header = response.headers.get('Link')
-        if link_header:
-            # Extract URL from the Link header
-            start = link_header.find('<') + 1
-            end = link_header.find('>')
-            converted_url = link_header[start:end]
-            if "php" not in url:
-                parsed_url = urlparse(converted_url)
-                final_url = urlunparse(parsed_url._replace(query='', fragment=''))
-            else:
-                final_url = converted_url
-            return {"url":final_url}
+        converted_url = response.url
+        if "php" not in url:
+            parsed_url = urlparse(converted_url)
+            final_url = urlunparse(parsed_url._replace(query='', fragment=''))
         else:
-            return "No Link header found"
+            final_url = converted_url
+        return {"url":final_url}
     else:
-        return f"Failed to retrieve location, status code: {response.status_code}"
+         return {"url":url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
