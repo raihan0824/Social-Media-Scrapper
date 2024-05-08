@@ -257,24 +257,35 @@ async def scrape_ta(url: str):
 
 @scraping_router.get("/api/v1/convert-facebook-url")
 def convert_fb_url(url: str):
-    headers = {
-    'Accept-Encoding': 'gzip, deflate, sdch',
-    'Accept-Language': 'en-US,en;q=0.8',
-    'Upgrade-Insecure-Requests': '1',
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Cache-Control': 'max-age=0',
-    'Connection': 'keep-alive',
-    }
-    response = urllib.request.urlopen(url)
-
-    converted_url = response.geturl()
-    if "php" not in url:
-        parsed_url = urlparse(converted_url)
+    parsed_url = urlparse(url)
+    
+    # Check if the URL has a video ID directly in its query
+    if "v=" in parsed_url.query:
+        video_id = re.search(r"v=(\d+)", url).group(1)
+        return {"url": f"https://www.facebook.com/reel/{video_id}"}
+    
+    # Use API to resolve the final URL if not directly available
+    api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
+    response = requests.get(api_url).json()
+    redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
+    
+    # Process the redirect URL to extract or clean it
+    if "share/v" in url:
+        video_id = re.search(r"story_fbid=(\d+)", redirect_url_raw).group(1)
+        redirect_url_clean = f"https://www.facebook.com/reel/{video_id}"
+    elif not redirect_url_raw.strip():
+        redirect_url_clean = url
+    else:
+        redirect_url_clean = redirect_url_raw
+    
+    # Clean up the URL to remove query and fragment parts if not a PHP link
+    parsed_url = urlparse(redirect_url_clean)
+    if "php" not in redirect_url_clean:
         final_url = urlunparse(parsed_url._replace(query='', fragment=''))
     else:
-        final_url = converted_url
-    return {"url":final_url}
+        final_url = redirect_url_clean
+    
+    return {"url": final_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
