@@ -265,7 +265,7 @@ def convert_fb_url(url: str):
     'Cache-Control': 'max-age=0',
     'Connection': 'keep-alive',
     }
-    response = requests.get(f"http://httpbin.org/redirect-to?url={url}",headers=headers)
+    response = requests.head(url, allow_redirects=True,headers=headers)
 
     if response.status_code == 200:
         converted_url = response.url
