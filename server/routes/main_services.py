@@ -264,8 +264,29 @@ def convert_fb_url(url: str):
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Cache-Control': 'max-age=0',
     'Connection': 'keep-alive',
-}
-    response = requests.get(url, headers=headers,verify=False)
+    }
+    with open('cookies.json', 'r') as f:
+        cookies = json.load(f)
+
+    # Create a session object
+    session = requests.Session()
+    session.headers.update(headers)
+
+    # Add cookies to the session
+    for c in cookies:
+        expires = c.get("expirationDate") or c.get("Expires raw")
+        if expires:
+            expires = int(expires / 1000)
+            session.cookies.set(name=c['name'], 
+                                value=c['value'], 
+                                domain=c['domain'],
+                                secure=c["secure"],
+                                path=c["path"],
+                                expires=expires)
+
+    # Make the request using the session with cookies
+    response = session.get(url)
+
     if response.status_code == 200:
         link_header = response.headers.get('Link')
         if link_header:
