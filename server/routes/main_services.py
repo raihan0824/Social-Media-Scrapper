@@ -288,6 +288,7 @@ def convert_fb_url(url: str):
     response = session.get(url)
 
     if response.status_code == 200:
+        print("Response Headers:", ", ".join(response.headers.keys()))
         link_header = response.headers.get('Link')
         if link_header:
             # Extract URL from the Link header
