@@ -12,6 +12,7 @@ import re
 import time
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse,urlunparse
+import urllib
 logger = logging.getLogger('Scraping-Log')
         
 warnings.filterwarnings("ignore")
@@ -265,18 +266,15 @@ def convert_fb_url(url: str):
     'Cache-Control': 'max-age=0',
     'Connection': 'keep-alive',
     }
-    response = requests.head(url, allow_redirects=True,headers=headers)
+    response = urllib.request.urlopen(url)
 
-    if response.status_code == 200:
-        converted_url = response.url
-        if "php" not in url:
-            parsed_url = urlparse(converted_url)
-            final_url = urlunparse(parsed_url._replace(query='', fragment=''))
-        else:
-            final_url = converted_url
-        return {"url":final_url}
+    converted_url = response.geturl()
+    if "php" not in url:
+        parsed_url = urlparse(converted_url)
+        final_url = urlunparse(parsed_url._replace(query='', fragment=''))
     else:
-         return {"url":url}
+        final_url = converted_url
+    return {"url":final_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
