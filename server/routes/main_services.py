@@ -304,7 +304,7 @@ async def scrape_facebook(url: str):
             await page.goto(url)
             time.sleep(5)
             # await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
-            tweet_calls = [f for f in _xhr_calls if "https://www.facebook.com/ajax/bulk-route-definitions/" in f.url][0]
+            tweet_calls = [f for f in _xhr_calls if "bulk-route-definitions" in f.url][0]
             data_raw = await tweet_calls.text()
             data = data_raw.split("for (;;);")[1]
             json_data = json.loads(data)
