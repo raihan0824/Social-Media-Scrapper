@@ -288,33 +288,67 @@ def convert_fb_url(url: str):
     return {"url": final_url}
     
 @scraping_router.get("/api/v1/scrape-facebook")
-def scrape_facebook(url: str):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
-    }
-    response = requests.get(url,headers=headers)
-    # Parse the HTML content with BeautifulSoup
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    redirect_count = 0
-    max_redirects = 3
-    while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
-        redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
-        url_redirect = redirect_url_raw.split("0;url=")[1]
-        response = requests.get(url_redirect, headers=headers)
+async def scrape_facebook(url: str):
+    if "php" in url:
+        _xhr_calls = []
+        async def intercept_response(response):
+            if response.request.resource_type == "xhr":
+                _xhr_calls.append(response)
+            return response
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+            page = await context.new_page()
+            page.on("response", intercept_response)
+            await page.goto(url)
+            await page.wait_for_load_state('load')
+            # await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
+            tweet_calls = [f for f in _xhr_calls if "https://www.facebook.com/ajax/bulk-route-definitions/" in f.url][0]
+            data_raw = await tweet_calls.text()
+            data = data_raw.split("for (;;);")[1]
+            json_data = json.loads(data)
+            first_key = next(iter(json_data['payload']['payloads']))
+
+            # Retrieve the data using the dynamic key
+            specific_data = json_data['payload']['payloads'][first_key]
+            parsed_data = specific_data["result"]["exports"]["meta"]["title"]
+            splitted_data = parsed_data.split("-")
+            username = splitted_data[0].strip()
+            content = splitted_data[1].strip()
+            output = {
+                "username":username,
+                "content":content,
+                "url":url
+            }
+            return output
+    else:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
+        }
+        response = requests.get(url,headers=headers)
+        # Parse the HTML content with BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
-        redirect_count += 1
+        
+        redirect_count = 0
+        max_redirects = 3
+        while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
+            redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
+            url_redirect = redirect_url_raw.split("0;url=")[1]
+            response = requests.get(url_redirect, headers=headers)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            redirect_count += 1
 
-    username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
-    if len(username.split("| By"))>1:
-        username = username.split("| By")[1].strip()
+        username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
+        if len(username.split("| By"))>1:
+            username = username.split("| By")[1].strip()
 
-    content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
+        content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
 
-    output = {
-        "username":username,
-        "content":content,
-        "url":url
-    }
+        output = {
+            "username":username,
+            "content":content,
+            "url":url
+        }
 
-    return output
+        return output
