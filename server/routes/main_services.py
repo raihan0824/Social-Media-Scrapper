@@ -323,8 +323,8 @@ async def scrape_facebook(url: str):
         max_redirects = 3
         while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
             redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
-            url = redirect_url_raw.split("0;url=")[1]
-            response = requests.get(url, headers=headers)
+            url_redirect = redirect_url_raw.split("0;url=")[1]
+            response = requests.get(url_redirect, headers=headers)
             soup = BeautifulSoup(response.text, 'html.parser')
             redirect_count += 1
 
