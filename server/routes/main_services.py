@@ -51,7 +51,8 @@ async def scrape_tweet(url: str):
         page = await context.new_page()
         page.on("response", intercept_response)
         await page.goto(url_transformed)
-        await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
+        # await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
+        time.sleep(3)
 
         tweet_calls = [f for f in _xhr_calls if "tweet-result" in f.url][0]
         data = await tweet_calls.json()
