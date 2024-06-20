@@ -18,6 +18,42 @@ logger = logging.getLogger('Scraping-Log')
 warnings.filterwarnings("ignore")
 scraping_router=APIRouter(tags=["Scraping Engine"])
 
+@scraping_router.get("/api/v2/scrape-tweet")
+def scrape_tweet(url:str):
+    def get_tweet_id(url):
+        match = re.search(r'/status/(\d+)', url)
+        if match:
+            tweet_id = match.group(1)
+            return tweet_id
+        else:
+            return None
+        
+    def parse_date_time(date_str, time_str):
+        try:
+            return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %I:%M %p')
+        except ValueError:
+            return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %H:%M')
+        
+    def get_tweet_result(id):
+        url = f"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token=123"
+        print(url)
+        response = requests.get(url)
+        return response.json()
+    
+    tweet_id = get_tweet_id(url)
+    
+    data = get_tweet_result(tweet_id)
+
+    match_date = re.search("r'(\d{1,2}:\d{2}(?: [AP]M)?) · (\d{1,2} \b\w+\b \d{2})'", data['created_at'])
+    if match_date:
+        time_str, date_str = match_date.groups()
+        created_at = parse_date_time(date_str, time_str)
+        data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
+    
+    return data
+
+    
+    
 @scraping_router.get("/api/v1/scrape-tweet")
 async def scrape_tweet(url: str):
     _xhr_calls = []
