@@ -35,7 +35,7 @@ def scrape_tweet(url:str):
             return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %H:%M')
         
     def get_tweet_result(id):
-        url = f"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token=123"
+        url = f"https://cdn.syndicatiogrwen.twimg.com/tweet-result?id={id}&lang=en&token=123"
         print(url)
         response = requests.get(url)
         return response.json()
