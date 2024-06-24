@@ -6,13 +6,14 @@ import logging
 import json
 from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright
-from server.utils.tools_ig import parse_url_ig
+from server.utils.tools import parse_url_ig
 from datetime import datetime
 import re
 import time
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse,urlunparse
-import urllib
+from facebook_scraper import get_posts
+
 logger = logging.getLogger('Scraping-Log')
         
 warnings.filterwarnings("ignore")
@@ -292,7 +293,7 @@ async def scrape_ta(url: str):
         return output
 
 @scraping_router.get("/api/v1/convert-facebook-url")
-def convert_fb_url(url: str):
+async def convert_fb_url(url: str):
     parsed_url = urlparse(url)
     
     # Check if the URL has a video ID directly in its query
@@ -300,70 +301,41 @@ def convert_fb_url(url: str):
         video_id = re.search(r"v=(\d+)", url).group(1)
         return {"url": f"https://www.facebook.com/reel/{video_id}"}
     
-    # Use API to resolve the final URL if not directly available
-    api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
-    response = requests.get(api_url).json()
-    redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
-    
-    # Process the redirect URL to extract or clean it
-    if "share/v" in url:
-        video_id = re.search(r"story_fbid=(\d+)", redirect_url_raw).group(1)
-        redirect_url_clean = f"https://www.facebook.com/reel/{video_id}"
-    elif not redirect_url_raw.strip():
-        redirect_url_clean = url
-    else:
-        redirect_url_clean = redirect_url_raw
-    
-    # Clean up the URL to remove query and fragment parts if not a PHP link
-    parsed_url = urlparse(redirect_url_clean)
-    if "php" not in redirect_url_clean:
-        final_url = urlunparse(parsed_url._replace(query='', fragment=''))
-    else:
-        final_url = redirect_url_clean
-    
-    return {"url": final_url}
+    try:
+        # Use API to resolve the final URL if not directly available
+        api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
+        response = requests.get(api_url).json()
+        redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
+        logger.info(redirect_url_raw)
+        # Process the redirect URL to extract or clean it
+        if not redirect_url_raw.strip():
+            redirect_url_clean = url
+        else:
+            redirect_url_clean = redirect_url_raw
+        
+        # Clean up the URL to remove query and fragment parts if not a PHP link
+        parsed_url = urlparse(redirect_url_clean)
+        if "php" not in redirect_url_clean:
+            final_url = urlunparse(parsed_url._replace(query='', fragment=''))
+        else:
+            final_url = redirect_url_clean
+        
+        if "login" in final_url:
+            raise HTTPException(status_code=500,detail="redirected to login page!")
+        return {"url": final_url}
+    except Exception as e:
+        logger.error(e)
+        gen=get_posts(
+            post_urls=[url],
+            cookies='./cookies.json'
+
+        )
+        post = next(gen)
+        return {"url":post["post_url"]}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
-    with open("cookies.json", "r") as file:
-        cookies = json.load(file)
-    if "php" in url:
-        _xhr_calls = []
-        async def intercept_response(response):
-            if response.request.resource_type == "xhr":
-                _xhr_calls.append(response)
-            return response
-
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
-            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-            context.add_cookies(cookies)
-            page = await context.new_page()
-            page.on("response", intercept_response)
-            await page.goto(url)
-            time.sleep(5)
-            page_content = await page.content()
-            print(page_content)
-            # await page.wait_for_selector("[data-testid='tweetText']",timeout=3000)
-            tweet_calls = [f for f in _xhr_calls if "bulk-route-definitions" in f.url][0]
-            data_raw = await tweet_calls.text()
-            data = data_raw.split("for (;;);")[1]
-            json_data = json.loads(data)
-            first_key = next(iter(json_data['payload']['payloads']))
-
-            # Retrieve the data using the dynamic key
-            specific_data = json_data['payload']['payloads'][first_key]
-            parsed_data = specific_data["result"]["exports"]["meta"]["title"]
-            splitted_data = parsed_data.split("-")
-            username = splitted_data[0].strip()
-            content = splitted_data[1].strip()
-            output = {
-                "username":username,
-                "content":content,
-                "url":url
-            }
-            return output
-    else:
+    try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
         }
@@ -380,11 +352,10 @@ async def scrape_facebook(url: str):
             soup = BeautifulSoup(response.text, 'html.parser')
             redirect_count += 1
 
-        username = soup.find('meta', attrs={'property': 'og:title'}).get('content')
-        if len(username.split("| By"))>1:
-            username = username.split("| By")[1].strip()
-
-        content = soup.find('meta', attrs={'property': 'og:description'}).get('content')
+        username_content = soup.find('meta', attrs={'property': 'og:title'}).get('content')
+        if len(username_content.split("|"))>1:
+            username = username_content.split("| By")[1].strip()
+            content = username_content.split("| By")[0].strip()
 
         output = {
             "username":username,
@@ -392,4 +363,18 @@ async def scrape_facebook(url: str):
             "url":url
         }
 
+        return output
+    except Exception as e:
+        logger.error(f"{e}, use other scraping method...")
+        gen=get_posts(
+            post_urls=[url],
+            cookies='./cookies.json'
+
+        )
+        post = next(gen)
+        output = {
+            "username":post["username"],
+            "content":post["text"],
+            "url":url
+        }
         return output

@@ -10,3 +10,5 @@ uvicorn
 playwright
 httpx
 bs4==0.0.1
+facebook-scraper==0.2.59
+lxml_html_clean==0.1.1
