@@ -13,8 +13,26 @@ import time
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse,urlunparse
 from facebook_scraper import get_posts
+from instaloader import Instaloader
+import json
+import instaloader
 
 logger = logging.getLogger('Scraping-Log')
+
+insta_loader = Instaloader(download_pictures=False,
+                     download_comments=False,
+                     download_videos=False,
+                     max_connection_attempts=1)
+
+with open("./cookies/instagram_cookies.json", "r") as f:
+    ig_cookies = json.load(f)
+
+cookie_dict = {cookie['name']: cookie['value'] for cookie in ig_cookies}
+insta_loader.load_session(username="ljvcfdd55",session_data=cookie_dict)
+
+username = insta_loader.test_login()
+
+logger.info(f"Succesfully login to instagram, username: {username}")
         
 warnings.filterwarnings("ignore")
 scraping_router=APIRouter(tags=["Scraping Engine"])
@@ -102,39 +120,12 @@ async def scrape_tweet(url: str):
 
 @scraping_router.get("/api/v1/scrape-ig")
 def scrape_ig(url: str):
-    url=parse_url_ig(url)
-    response = requests.get(url)
-    # Parse the HTML content with BeautifulSoup
-    soup = BeautifulSoup(response.text, 'html.parser')
-
-    # Validate if the post private or not
-    temp_url = soup.find('link', attrs={'hreflang': 'x-default'}).get('href')
-    if '/p/' not in temp_url:
-        raise HTTPException(
-            status_code = status.HTTP_403_FORBIDDEN,
-            detail = 'The post is on a private user.'
-        )
-    
-    description_meta = soup.find('meta', attrs={'property': 'og:title'})
-    if description_meta:
-        description_content = description_meta.get('content')
-    else:
-        description_content = "No description found"
-
-    # Regular expression pattern to match the username and the quoted text
-    pattern = r'^(.+) on Instagram: "(.*)"'
-
-    # Use re.search to find matches
-    match = re.search(pattern,description_content ,re.DOTALL)
-    if match:
-        username = match.group(1).strip()
-        quoted_text = match.group(2).strip()
-    else:
-        print("No match found")
+    parsed_url,shortcode=parse_url_ig(url)
+    post = instaloader.Post.from_shortcode(insta_loader.context, shortcode)
     output = {
-        "username":username,
-        "content":quoted_text,
-        "url":url
+        "username":post.owner_username,
+        "content":post.caption,
+        "url":parsed_url
     }
 
     return output
@@ -327,7 +318,7 @@ async def convert_fb_url(url: str):
         logger.error(e)
         gen=get_posts(
             post_urls=[url],
-            cookies='./cookies.json'
+            cookies='./cookies/facebook_cookies.json'
 
         )
         post = next(gen)
@@ -368,7 +359,7 @@ async def scrape_facebook(url: str):
         logger.error(f"{e}, use other scraping method...")
         gen=get_posts(
             post_urls=[url],
-            cookies='./cookies.json'
+            cookies='./cookies/facebook_cookies.json'
 
         )
         post = next(gen)

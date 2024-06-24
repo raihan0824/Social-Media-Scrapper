@@ -7,9 +7,10 @@ def parse_url_ig(url:str)->str:
     if match:
         value = match.group(1)
         url_final = f"https://instagram.com/p/{value}"
+        shortcode = value
     else:
         print("Value not found")
-    return url_final
+    return url_final,shortcode
 
 def redirect_fb_soup(url:str)->str:
     headers = {
