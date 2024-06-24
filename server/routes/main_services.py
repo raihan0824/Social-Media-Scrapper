@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter,status,HTTPException
+from fastapi import APIRouter,HTTPException
 import warnings 
 import requests
 import logging
@@ -120,15 +120,21 @@ async def scrape_tweet(url: str):
 
 @scraping_router.get("/api/v1/scrape-ig")
 def scrape_ig(url: str):
-    parsed_url,shortcode=parse_url_ig(url)
-    post = instaloader.Post.from_shortcode(insta_loader.context, shortcode)
-    output = {
-        "username":post.owner_username,
-        "content":post.caption,
-        "url":parsed_url
-    }
-
-    return output
+    try:
+        parsed_url,shortcode=parse_url_ig(url)
+        post = instaloader.Post.from_shortcode(insta_loader.context, shortcode)
+        output = {
+            "username":post.owner_username,
+            "content":post.caption,
+            "url":parsed_url
+        }
+        return output
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(
+            status_code=500,
+            detail="unknown error!"
+        )
 
 @scraping_router.get("/api/v1/scrape-tiktok")
 def scrape_tiktok(url: str):
@@ -293,79 +299,95 @@ async def convert_fb_url(url: str):
         return {"url": f"https://www.facebook.com/reel/{video_id}"}
     
     try:
-        # Use API to resolve the final URL if not directly available
-        api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
-        response = requests.get(api_url).json()
-        redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
-        logger.info(redirect_url_raw)
-        # Process the redirect URL to extract or clean it
-        if not redirect_url_raw.strip():
-            redirect_url_clean = url
-        else:
-            redirect_url_clean = redirect_url_raw
+        try:
+            # Use API to resolve the final URL if not directly available
+            api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
+            response = requests.get(api_url).json()
+            redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
+            logger.info(redirect_url_raw)
+            # Process the redirect URL to extract or clean it
+            if not redirect_url_raw.strip():
+                redirect_url_clean = url
+            else:
+                redirect_url_clean = redirect_url_raw
+            
+            # Clean up the URL to remove query and fragment parts if not a PHP link
+            parsed_url = urlparse(redirect_url_clean)
+            if "php" not in redirect_url_clean:
+                final_url = urlunparse(parsed_url._replace(query='', fragment=''))
+            else:
+                final_url = redirect_url_clean
+            
+            if "login" in final_url:
+                raise HTTPException(status_code=500,detail="redirected to login page!")
+            return {"url": final_url}
+        except Exception as e:
+            logger.error(e)
+            gen=get_posts(
+                post_urls=[url],
+                cookies='./cookies/facebook_cookies.json'
+
+            )
+            post = next(gen)
+            return {"url":post["post_url"]}
         
-        # Clean up the URL to remove query and fragment parts if not a PHP link
-        parsed_url = urlparse(redirect_url_clean)
-        if "php" not in redirect_url_clean:
-            final_url = urlunparse(parsed_url._replace(query='', fragment=''))
-        else:
-            final_url = redirect_url_clean
-        
-        if "login" in final_url:
-            raise HTTPException(status_code=500,detail="redirected to login page!")
-        return {"url": final_url}
     except Exception as e:
         logger.error(e)
-        gen=get_posts(
-            post_urls=[url],
-            cookies='./cookies/facebook_cookies.json'
-
+        raise HTTPException(
+            status_code=500,
+            detail="unknown error!"
         )
-        post = next(gen)
-        return {"url":post["post_url"]}
     
 @scraping_router.get("/api/v1/scrape-facebook")
 async def scrape_facebook(url: str):
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
-        }
-        response = requests.get(url,headers=headers)
-        # Parse the HTML content with BeautifulSoup
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        redirect_count = 0
-        max_redirects = 3
-        while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
-            redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
-            url_redirect = redirect_url_raw.split("0;url=")[1]
-            response = requests.get(url_redirect, headers=headers)
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
+            }
+            response = requests.get(url,headers=headers)
+            # Parse the HTML content with BeautifulSoup
             soup = BeautifulSoup(response.text, 'html.parser')
-            redirect_count += 1
+            
+            redirect_count = 0
+            max_redirects = 3
+            while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
+                redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
+                url_redirect = redirect_url_raw.split("0;url=")[1]
+                response = requests.get(url_redirect, headers=headers)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                redirect_count += 1
 
-        username_content = soup.find('meta', attrs={'property': 'og:title'}).get('content')
-        if len(username_content.split("|"))>1:
-            username = username_content.split("| By")[1].strip()
-            content = username_content.split("| By")[0].strip()
+            username_content = soup.find('meta', attrs={'property': 'og:title'}).get('content')
+            if len(username_content.split("|"))>1:
+                username = username_content.split("| By")[1].strip()
+                content = username_content.split("| By")[0].strip()
 
-        output = {
-            "username":username,
-            "content":content,
-            "url":url
-        }
+            output = {
+                "username":username,
+                "content":content,
+                "url":url
+            }
 
-        return output
+            return output
+        except Exception as e:
+            logger.error(f"{e}, use other scraping method...")
+            gen=get_posts(
+                post_urls=[url],
+                cookies='./cookies/facebook_cookies.json'
+
+            )
+            post = next(gen)
+            output = {
+                "username":post["username"],
+                "content":post["text"],
+                "url":url
+            }
+            return output
+        
     except Exception as e:
-        logger.error(f"{e}, use other scraping method...")
-        gen=get_posts(
-            post_urls=[url],
-            cookies='./cookies/facebook_cookies.json'
-
+        logger.error(e)
+        raise HTTPException(
+            status_code=500,
+            detail="unknown error!"
         )
-        post = next(gen)
-        output = {
-            "username":post["username"],
-            "content":post["text"],
-            "url":url
-        }
-        return output
