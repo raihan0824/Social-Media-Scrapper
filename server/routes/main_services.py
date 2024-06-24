@@ -322,7 +322,7 @@ async def convert_fb_url(url: str):
                 raise HTTPException(status_code=500,detail="redirected to login page!")
             return {"url": final_url}
         except Exception as e:
-            logger.error(e)
+            logger.error(f"{e}, use other converting method...")
             gen=get_posts(
                 post_urls=[url],
                 cookies='./cookies/facebook_cookies.json'
@@ -359,9 +359,13 @@ async def scrape_facebook(url: str):
                 redirect_count += 1
 
             username_content = soup.find('meta', attrs={'property': 'og:title'}).get('content')
-            if len(username_content.split("|"))>1:
+
+            if len(username_content.split("| By"))>1:
                 username = username_content.split("| By")[1].strip()
                 content = username_content.split("| By")[0].strip()
+            else:
+                username = username_content.split("|")[1].strip()
+                content = username_content.split("|")[0].strip()
 
             output = {
                 "username":username,
