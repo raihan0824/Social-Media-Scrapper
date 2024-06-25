@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter,HTTPException
+from requests.exceptions import ContentDecodingError,TooManyRedirects
 import warnings 
 import requests
 import logging
@@ -9,30 +10,51 @@ from playwright.sync_api import sync_playwright
 from server.utils.tools import parse_url_ig
 from datetime import datetime
 import re
-import time
+import os
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse,urlunparse
 from facebook_scraper import get_posts
-from instaloader import Instaloader
 import json
 import instaloader
 
 logger = logging.getLogger('Scraping-Log')
 
-insta_loader = Instaloader(download_pictures=False,
-                     download_comments=False,
-                     download_videos=False,
-                     max_connection_attempts=1)
+class IGSessionManager:
+    def __init__(self, cookies_dir):
+        self.sessions = []
+        self.usernames=[]
+        self.load_sessions(cookies_dir)
+        self.current_index = 0
 
-with open("./cookies/instagram_cookies.json", "r") as f:
-    ig_cookies = json.load(f)
+    def load_sessions(self, cookies_dir):
+        cookie_files = [f for f in os.listdir(cookies_dir) if f.endswith('.json')]
+        if not cookie_files:
+            raise Exception("No cookie files found")
 
-cookie_dict = {cookie['name']: cookie['value'] for cookie in ig_cookies}
-insta_loader.load_session(username="ljvcfdd55",session_data=cookie_dict)
+        for cookie_file in cookie_files:
+            with open(os.path.join(cookies_dir, cookie_file), "r") as f:
+                ig_cookies = json.load(f)
+            username_extracted = re.search(r'cookies_(.+)\.json', cookie_file).group(1)
+            self.usernames.append(username_extracted)
+            cookie_dict = {cookie['name']: cookie['value'] for cookie in ig_cookies}
+            insta_loader = instaloader.Instaloader(download_pictures=False,
+                                                   download_comments=False,
+                                                   download_videos=False,
+                                                   max_connection_attempts=1)
+            insta_loader.load_session(username=username_extracted, session_data=cookie_dict)
+            self.sessions.append(insta_loader)
+            logger.info(f"Loaded cookies from {cookie_file}")
 
-username = insta_loader.test_login()
+    def get_next_session(self):
+        if not self.sessions:
+            raise Exception("No sessions available")
+        session = self.sessions[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.sessions)
+        logger.info(f"Use {self.usernames[self.current_index]} session..")
+        return session
 
-logger.info(f"Succesfully login to instagram, username: {username}")
+# Initialize session manager
+ig_session_manager = IGSessionManager('./cookies/instagram')
         
 warnings.filterwarnings("ignore")
 scraping_router=APIRouter(tags=["Scraping Engine"])
@@ -120,21 +142,81 @@ async def scrape_tweet(url: str):
 
 @scraping_router.get("/api/v1/scrape-ig")
 def scrape_ig(url: str):
+    parsed_url,shortcode=parse_url_ig(url)
     try:
-        parsed_url,shortcode=parse_url_ig(url)
-        post = instaloader.Post.from_shortcode(insta_loader.context, shortcode)
+        response = requests.get(parsed_url)
+        # Parse the HTML content with BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        datatype_meta = soup.find('meta', attrs={'property': 'og:type'})
+        if datatype_meta:
+            data_type = datatype_meta.get('content')
+            if data_type=='profile':
+                raise HTTPException(
+                    status_code = 403,
+                    detail = 'The post is on a private user.'
+                )
+            else:
+                pass
+        else:
+            raise ContentDecodingError
+
+        description_meta = soup.find('meta', attrs={'property': 'og:title'})
+        if description_meta:
+            description_content = description_meta.get('content')
+            # Regular expression pattern to match the username and the quoted text
+            pattern = r'^(.+) on Instagram: "(.*)"'
+
+            # Use re.search to find matches
+            match = re.search(pattern,description_content ,re.DOTALL)
+            if match:
+                quoted_text = match.group(2).strip()
+            else:
+                raise ContentDecodingError
+            
+            content = quoted_text
+        else:
+            raise ContentDecodingError
+    
+        user_meta = soup.find('meta', attrs={'name': 'twitter:title'})
+        if user_meta:
+            user_content = user_meta.get('content')
+            pattern = r"@(\w+)"
+            match = re.search(pattern, user_content)
+            if match:
+                username = match.group(1)
+            else:
+                logger.error('Cannot parse username')
+                username=""
+        else:
+            logger.error('Cannot parse username')
+            username=""
+        
         output = {
-            "username":post.owner_username,
-            "content":post.caption,
+            "username":username,
+            "content":content,
             "url":parsed_url
         }
+
         return output
-    except Exception as e:
-        logger.error(e)
-        raise HTTPException(
-            status_code=500,
-            detail="unknown error!"
-        )
+    
+    except ContentDecodingError:
+        logger.error("Cannot scrape using bs4, use 3rd party app instead...")
+        try:
+            insta_loader = ig_session_manager.get_next_session()
+            post = instaloader.Post.from_shortcode(insta_loader.context, shortcode)
+            output = {
+                "username":post.owner_username,
+                "content":post.caption,
+                "url":parsed_url
+            }
+            return output
+        except Exception as e:
+            logger.error(e)
+            raise HTTPException(
+                status_code=500,
+                detail="unknown error!"
+            )
 
 @scraping_router.get("/api/v1/scrape-tiktok")
 def scrape_tiktok(url: str):
@@ -165,23 +247,30 @@ def scrape_tiktok(url: str):
             except json.JSONDecodeError:
                 continue  # If JSON decoding fails, move on to the next tag
     else:
-        print("Failed to retrieve the page")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve the page"
+        )
 
-    data_parsed=data_json["__DEFAULT_SCOPE__"]["seo.abtest"]
+    try:
+        data_parsed=data_json["__DEFAULT_SCOPE__"]["seo.abtest"]
 
-    data_desc=data_json["__DEFAULT_SCOPE__"]["webapp.video-detail"]
+        data_desc=data_json["__DEFAULT_SCOPE__"]["webapp.video-detail"]
 
-    tiktok_address=data_parsed["canonical"]
-    # tiktok_address=urlparse(tiktok_address)
-    # tiktok_address=urlunparse(tiktok_address._replace(netloc='tiktok.com', query='', fragment=''))
-    tiktok_handle=data_desc["itemInfo"]["itemStruct"]["author"]["nickname"]
-    tiktok_caption=data_desc["itemInfo"]["itemStruct"]["desc"]
-    output={
-        "username":tiktok_handle,
-        "content":tiktok_caption,
-        "url":tiktok_address
-    }
-    return output
+        tiktok_address=data_parsed["canonical"]
+        tiktok_handle=data_desc["itemInfo"]["itemStruct"]["author"]["nickname"]
+        tiktok_caption=data_desc["itemInfo"]["itemStruct"]["desc"]
+        output={
+            "username":tiktok_handle,
+            "content":tiktok_caption,
+            "url":tiktok_address
+        }
+        return output
+    except:
+        raise HTTPException(
+            status_code=500,
+            detail="Cannot find element!"
+        )
 
 @scraping_router.get("/api/v1/convert-tiktok-url")
 def convert_tiktok_url(url:str):
@@ -195,7 +284,6 @@ def convert_tiktok_url(url:str):
         # Parse the HTML content with BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
         # Look for script tags that might contain a JSON object
-        # This is a guess; you'll need to find the correct script tag on the actual page
         script_tags = soup.find_all('script', {'type': 'application/json'})
 
         # Iterate through the script tags to find the one containing the video details
@@ -210,13 +298,22 @@ def convert_tiktok_url(url:str):
             except json.JSONDecodeError:
                 continue  # If JSON decoding fails, move on to the next tag
     else:
-        print("Failed to retrieve the page")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve the page"
+        )
 
-    data_parsed=data_json["__DEFAULT_SCOPE__"]["seo.abtest"]
-    tiktok_address=data_parsed["canonical"]
-    return {
-        "url":tiktok_address,
-    }
+    try:
+        data_parsed=data_json["__DEFAULT_SCOPE__"]["seo.abtest"]
+        tiktok_address=data_parsed["canonical"]
+        return {
+            "url":tiktok_address,
+        }
+    except:
+        raise HTTPException(
+            status_code=500,
+            detail="Cannot find element!"
+        )
 
 @scraping_router.get("/api/v1/scrape-youtube")
 def scrape_youtube(url: str):
@@ -319,13 +416,13 @@ async def convert_fb_url(url: str):
                 final_url = redirect_url_clean
             
             if "login" in final_url:
-                raise HTTPException(status_code=500,detail="redirected to login page!")
+                raise TooManyRedirects
             return {"url": final_url}
-        except Exception as e:
-            logger.error(f"{e}, use other converting method...")
+        except TooManyRedirects:
+            logger.error("use other converting method...")
             gen=get_posts(
                 post_urls=[url],
-                cookies='./cookies/facebook_cookies.json'
+                cookies='./cookies/facebook/facebook_cookies.json'
 
             )
             post = next(gen)
@@ -374,11 +471,12 @@ async def scrape_facebook(url: str):
             }
 
             return output
-        except Exception as e:
-            logger.error(f"{e}, use other scraping method...")
+        
+        except Exception:
+            logger.error(f"Cannot scrape using bs4, use 3rd party method...")
             gen=get_posts(
                 post_urls=[url],
-                cookies='./cookies/facebook_cookies.json'
+                cookies='./cookies/facebook/facebook_cookies.json'
 
             )
             post = next(gen)
