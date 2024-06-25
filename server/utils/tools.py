@@ -1,6 +1,15 @@
 import re
+import os
 import requests
+import json
+import logging
+import instaloader
 from bs4 import BeautifulSoup
+
+logger_instagram = logging.getLogger('Scraping-Instagram')
+logger_facebook = logging.getLogger('Scraping-Facebook')
+logger_tiktok = logging.getLogger('Scraping-TikTok')
+logger_twitter = logging.getLogger('Scraping-Twitter')
 
 def parse_url_ig(url:str)->str:
     match = re.search(r'(?:reel|p)/([^/?]+)', url)
@@ -30,3 +39,40 @@ def redirect_fb_soup(url:str)->str:
         redirect_count += 1
     
     return url_redirect
+
+class IGSessionManager:
+    def __init__(self, cookies_dir):
+        self.sessions = []
+        self.parsed_cookies=[]
+        self.usernames=[]
+        self.load_sessions(cookies_dir)
+        self.current_index = 0
+
+    def load_sessions(self, cookies_dir):
+        cookie_files = [f for f in os.listdir(cookies_dir) if f.endswith('.json')]
+        if not cookie_files:
+            raise Exception("No cookie files found")
+
+        for cookie_file in cookie_files:
+            with open(os.path.join(cookies_dir, cookie_file), "r") as f:
+                ig_cookies = json.load(f)
+            username_extracted = re.search(r'cookies_(.+)\.json', cookie_file).group(1)
+            self.usernames.append(username_extracted)
+            cookie_dict = {cookie['name']: cookie['value'] for cookie in ig_cookies}
+            self.parsed_cookies.append(cookie_dict)
+            insta_loader = instaloader.Instaloader(download_pictures=False,
+                                                   download_comments=False,
+                                                   download_videos=False,
+                                                   max_connection_attempts=1)
+            insta_loader.load_session(username=username_extracted, session_data=cookie_dict)
+            self.sessions.append(insta_loader)
+            logger_instagram.info(f"Loaded cookies from {cookie_file}")
+
+    def get_next_session(self):
+        if not self.sessions:
+            raise Exception("No sessions available")
+        session = self.sessions[self.current_index]
+        cookie = self.parsed_cookies[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.sessions)
+        logger_instagram.info(f"Use {self.usernames[self.current_index]} session..")
+        return session,cookie

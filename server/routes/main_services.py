@@ -7,7 +7,7 @@ import logging
 import json
 from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright
-from server.utils.tools import parse_url_ig
+from server.utils.tools import parse_url_ig,IGSessionManager
 from datetime import datetime
 import re
 import os
@@ -17,46 +17,16 @@ from facebook_scraper import get_posts
 import json
 import instaloader
 
-logger = logging.getLogger('Scraping-Log')
+warnings.filterwarnings("ignore", module='facebook_scraper.extractors')
 
-class IGSessionManager:
-    def __init__(self, cookies_dir):
-        self.sessions = []
-        self.usernames=[]
-        self.load_sessions(cookies_dir)
-        self.current_index = 0
-
-    def load_sessions(self, cookies_dir):
-        cookie_files = [f for f in os.listdir(cookies_dir) if f.endswith('.json')]
-        if not cookie_files:
-            raise Exception("No cookie files found")
-
-        for cookie_file in cookie_files:
-            with open(os.path.join(cookies_dir, cookie_file), "r") as f:
-                ig_cookies = json.load(f)
-            username_extracted = re.search(r'cookies_(.+)\.json', cookie_file).group(1)
-            self.usernames.append(username_extracted)
-            cookie_dict = {cookie['name']: cookie['value'] for cookie in ig_cookies}
-            insta_loader = instaloader.Instaloader(download_pictures=False,
-                                                   download_comments=False,
-                                                   download_videos=False,
-                                                   max_connection_attempts=1)
-            insta_loader.load_session(username=username_extracted, session_data=cookie_dict)
-            self.sessions.append(insta_loader)
-            logger.info(f"Loaded cookies from {cookie_file}")
-
-    def get_next_session(self):
-        if not self.sessions:
-            raise Exception("No sessions available")
-        session = self.sessions[self.current_index]
-        self.current_index = (self.current_index + 1) % len(self.sessions)
-        logger.info(f"Use {self.usernames[self.current_index]} session..")
-        return session
+logger_instagram = logging.getLogger('Scraping-Instagram')
+logger_facebook = logging.getLogger('Scraping-Facebook')
+logger_tiktok = logging.getLogger('Scraping-TikTok')
+logger_twitter = logging.getLogger('Scraping-Twitter')
 
 # Initialize session manager
 ig_session_manager = IGSessionManager('./cookies/instagram')
-        
-warnings.filterwarnings("ignore")
+
 scraping_router=APIRouter(tags=["Scraping Engine"])
 
 @scraping_router.get("/api/v2/scrape-tweet")
@@ -67,7 +37,10 @@ def scrape_tweet(url:str):
             tweet_id = match.group(1)
             return tweet_id
         else:
-            return None
+            raise HTTPException(
+                status_code=500,
+                detail="Cannot get tweet ID!"
+            )
         
     def parse_date_time(date_str, time_str):
         try:
@@ -77,24 +50,25 @@ def scrape_tweet(url:str):
         
     def get_tweet_result(id):
         url = f"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token=123"
-        print(url)
         response = requests.get(url)
         return response.json()
     
-    tweet_id = get_tweet_id(url)
-    
-    data = get_tweet_result(tweet_id)
+    try:
+        tweet_id = get_tweet_id(url)
+        data = get_tweet_result(tweet_id)
+        match_date = re.search("r'(\d{1,2}:\d{2}(?: [AP]M)?) · (\d{1,2} \b\w+\b \d{2})'", data['created_at'])
+        if match_date:
+            time_str, date_str = match_date.groups()
+            created_at = parse_date_time(date_str, time_str)
+            data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
+        return data
+    except Exception as e:
+        logger_twitter.error(e)
+        raise HTTPException(
+            status_code=500,
+            detail="unknown error!"
+        )
 
-    match_date = re.search("r'(\d{1,2}:\d{2}(?: [AP]M)?) · (\d{1,2} \b\w+\b \d{2})'", data['created_at'])
-    if match_date:
-        time_str, date_str = match_date.groups()
-        created_at = parse_date_time(date_str, time_str)
-        data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
-    
-    return data
-
-    
-    
 @scraping_router.get("/api/v1/scrape-tweet")
 async def scrape_tweet(url: str):
     _xhr_calls = []
@@ -111,7 +85,10 @@ async def scrape_tweet(url: str):
             tweet_id = match.group(1)
             return f"https://platform.twitter.com/embed/Tweet.html?id={tweet_id}"
         else:
-            return None
+            raise HTTPException(
+                status_code=500,
+                detail="cannot get tweet ID!"
+            )
 
     url_transformed = transform_url(url)
 
@@ -122,29 +99,37 @@ async def scrape_tweet(url: str):
 
     date_time_pattern = r'(\d{1,2}:\d{2}(?: [AP]M)?) · (\d{1,2} \b\w+\b \d{2})'
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch()
-        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await context.new_page()
-        page.on("response", intercept_response)
-        await page.goto(url_transformed)
-        await page.wait_for_selector("[role='article']",timeout=3000)
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+            page = await context.new_page()
+            page.on("response", intercept_response)
+            await page.goto(url_transformed)
+            await page.wait_for_selector("[role='article']",timeout=3000)
 
-        tweet_calls = [f for f in _xhr_calls if "tweet-result" in f.url][0]
-        data = await tweet_calls.json()
-        match = re.search(date_time_pattern, data['created_at'])
-        if match:
-            time_str, date_str = match.groups()
-            created_at = await parse_date_time(date_str, time_str)
-            data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
-        
-        return data
+            tweet_calls = [f for f in _xhr_calls if "tweet-result" in f.url][0]
+            data = await tweet_calls.json()
+            match = re.search(date_time_pattern, data['created_at'])
+            if match:
+                time_str, date_str = match.groups()
+                created_at = await parse_date_time(date_str, time_str)
+                data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
+            
+            return data
+    except Exception as e:
+        logger_twitter.error(e)
+        raise HTTPException(
+            status_code=500,
+            detail="unknown error!"
+        )
 
 @scraping_router.get("/api/v1/scrape-ig")
 def scrape_ig(url: str):
     parsed_url,shortcode=parse_url_ig(url)
+    session,cookie = ig_session_manager.get_next_session()
     try:
-        response = requests.get(parsed_url)
+        response = requests.get(parsed_url,cookies=cookie)
         # Parse the HTML content with BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -186,10 +171,10 @@ def scrape_ig(url: str):
             if match:
                 username = match.group(1)
             else:
-                logger.error('Cannot parse username')
+                logger_instagram.error('Cannot parse username')
                 username=""
         else:
-            logger.error('Cannot parse username')
+            logger_instagram.error('Cannot parse username')
             username=""
         
         output = {
@@ -201,10 +186,9 @@ def scrape_ig(url: str):
         return output
     
     except ContentDecodingError:
-        logger.error("Cannot scrape using bs4, use 3rd party app instead...")
+        logger_instagram.error("Cannot scrape using bs4, use 3rd party app instead...")
         try:
-            insta_loader = ig_session_manager.get_next_session()
-            post = instaloader.Post.from_shortcode(insta_loader.context, shortcode)
+            post = instaloader.Post.from_shortcode(session.context, shortcode)
             output = {
                 "username":post.owner_username,
                 "content":post.caption,
@@ -212,7 +196,7 @@ def scrape_ig(url: str):
             }
             return output
         except Exception as e:
-            logger.error(e)
+            logger_instagram.error(e)
             raise HTTPException(
                 status_code=500,
                 detail="unknown error!"
@@ -225,7 +209,7 @@ def scrape_tiktok(url: str):
     }
     url = url.replace("photo","video")
     response = requests.get(url, headers=headers)
-
+    
     # Check if the request was successful
     if response.status_code == 200:
         # Parse the HTML content with BeautifulSoup
@@ -401,7 +385,7 @@ async def convert_fb_url(url: str):
             api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
             response = requests.get(api_url).json()
             redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
-            logger.info(redirect_url_raw)
+            logger_facebook.info(redirect_url_raw)
             # Process the redirect URL to extract or clean it
             if not redirect_url_raw.strip():
                 redirect_url_clean = url
@@ -419,7 +403,7 @@ async def convert_fb_url(url: str):
                 raise TooManyRedirects
             return {"url": final_url}
         except TooManyRedirects:
-            logger.error("use other converting method...")
+            logger_facebook.error("use other converting method...")
             gen=get_posts(
                 post_urls=[url],
                 cookies='./cookies/facebook/facebook_cookies.json'
@@ -429,7 +413,7 @@ async def convert_fb_url(url: str):
             return {"url":post["post_url"]}
         
     except Exception as e:
-        logger.error(e)
+        logger_facebook.error(e)
         raise HTTPException(
             status_code=500,
             detail="unknown error!"
@@ -473,7 +457,7 @@ async def scrape_facebook(url: str):
             return output
         
         except Exception:
-            logger.error(f"Cannot scrape using bs4, use 3rd party method...")
+            logger_facebook.error(f"Cannot scrape using bs4, use 3rd party method...")
             gen=get_posts(
                 post_urls=[url],
                 cookies='./cookies/facebook/facebook_cookies.json'
@@ -488,7 +472,7 @@ async def scrape_facebook(url: str):
             return output
         
     except Exception as e:
-        logger.error(e)
+        logger_facebook.error(e)
         raise HTTPException(
             status_code=500,
             detail="unknown error!"
