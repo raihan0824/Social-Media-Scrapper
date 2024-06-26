@@ -1,44 +1,11 @@
 import re
 import os
-import requests
 import json
 import logging
 import instaloader
-from bs4 import BeautifulSoup
+from requests.exceptions import ContentDecodingError
 
 logger_instagram = logging.getLogger('Scraping-Instagram')
-logger_facebook = logging.getLogger('Scraping-Facebook')
-logger_tiktok = logging.getLogger('Scraping-TikTok')
-logger_twitter = logging.getLogger('Scraping-Twitter')
-
-def parse_url_ig(url:str)->str:
-    match = re.search(r'(?:reel|p)/([^/?]+)', url)
-    if match:
-        value = match.group(1)
-        url_final = f"https://instagram.com/p/{value}"
-        shortcode = value
-    else:
-        print("Value not found")
-    return url_final,shortcode
-
-def redirect_fb_soup(url:str)->str:
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15'
-    }
-    response = requests.get(url,headers=headers)
-    # Parse the HTML content with BeautifulSoup
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    redirect_count = 0
-    max_redirects = 3
-    while "redirecting" in soup.find("title").text.lower() and redirect_count < max_redirects:
-        redirect_url_raw = soup.find('meta', attrs={'http-equiv': 'refresh'}).get('content')
-        url_redirect = redirect_url_raw.split("0;url=")[1]
-        response = requests.get(url_redirect, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        redirect_count += 1
-    
-    return url_redirect
 
 class IGSessionManager:
     def __init__(self, cookies_dir):
@@ -76,3 +43,42 @@ class IGSessionManager:
         self.current_index = (self.current_index + 1) % len(self.sessions)
         logger_instagram.info(f"Use {self.usernames[self.current_index]} session..")
         return session,cookie
+    
+
+def parse_url_ig(url:str)->str:
+    match = re.search(r'(?:reel|p)/([^/?]+)', url)
+    if match:
+        value = match.group(1)
+        url_final = f"https://instagram.com/p/{value}"
+        shortcode = value
+    else:
+        print("Value not found")
+    return url_final,shortcode
+
+def extract_instagram_data(soup):
+    description_meta = soup.find('meta', attrs={'property': 'og:title'})
+    if description_meta:
+        description_content = description_meta.get('content')
+        match = re.search(r'^(.+) on Instagram: "(.*)"', description_content, re.DOTALL)
+        if match:
+            quoted_text = match.group(2).strip()
+            return quoted_text
+    raise ContentDecodingError
+
+def extract_instagram_username(soup):
+    user_meta = soup.find('meta', attrs={'name': 'twitter:title'})
+    if user_meta:
+        user_content = user_meta.get('content')
+        match = re.search(r"@(\w+)", user_content)
+        if match:
+            return match.group(1)
+    logger_instagram.error('Cannot parse username')
+    return ""
+
+def fetch_instagram_post(session, shortcode, parsed_url):
+    post = instaloader.Post.from_shortcode(session.context, shortcode)
+    return {
+        "username": post.owner_username,
+        "content": post.caption,
+        "url": parsed_url
+    }

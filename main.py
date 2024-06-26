@@ -1,7 +1,7 @@
 import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from server.routes import main_services
+from server.routes import conversion_services, main_services
 import uvicorn
 import os
 import logging
@@ -19,6 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(main_services.scraping_router)
+app.include_router(conversion_services.conversion_router)
 
 @app.get('/')
 def ping():
@@ -51,6 +52,7 @@ if __name__ == '__main__':
 
     logging.getLogger('').addHandler(handler)
     logging.getLogger('').setLevel(logging.INFO)
+    logging.getLogger('facebook_scraper.extractors').setLevel(logging.ERROR)
 
     logger = logging.getLogger('Scraper API')
     

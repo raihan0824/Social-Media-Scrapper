@@ -1,24 +1,23 @@
-
-from fastapi import APIRouter,HTTPException
-from requests.exceptions import ContentDecodingError,TooManyRedirects
-import warnings 
-import requests
 import logging
-import json
-from playwright.async_api import async_playwright
-from playwright.sync_api import sync_playwright
-from server.utils.tools import parse_url_ig,IGSessionManager
-from datetime import datetime
 import re
-import os
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse,urlunparse
-from facebook_scraper import get_posts
 import json
-import instaloader
+import warnings
+
+import requests
+from bs4 import BeautifulSoup
+from fastapi import APIRouter, HTTPException
+from requests.exceptions import ContentDecodingError
+from facebook_scraper import get_posts
+
+from server.utils.instagram import IGSessionManager,parse_url_ig,extract_instagram_data,extract_instagram_username,fetch_instagram_post
+from server.utils.twitter import get_tweet_id, get_tweet_result, extract_twitter_datetime,fetch_tweet_data,transform_tweet_url
+
+from schema.response import ResponseBody
+
 
 warnings.filterwarnings("ignore", module='facebook_scraper.extractors')
 
+# Initialize loggers
 logger_instagram = logging.getLogger('Scraping-Instagram')
 logger_facebook = logging.getLogger('Scraping-Facebook')
 logger_tiktok = logging.getLogger('Scraping-TikTok')
@@ -27,400 +26,106 @@ logger_twitter = logging.getLogger('Scraping-Twitter')
 # Initialize session manager
 ig_session_manager = IGSessionManager('./cookies/instagram')
 
-scraping_router=APIRouter(tags=["Scraping Engine"])
+scraping_router = APIRouter(tags=["Scraping Engine"])
 
 @scraping_router.get("/api/v2/scrape-tweet")
-def scrape_tweet(url:str):
-    def get_tweet_id(url):
-        match = re.search(r'/status/(\d+)', url)
-        if match:
-            tweet_id = match.group(1)
-            return tweet_id
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Cannot get tweet ID!"
-            )
-        
-    def parse_date_time(date_str, time_str):
-        try:
-            return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %I:%M %p')
-        except ValueError:
-            return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %H:%M')
-        
-    def get_tweet_result(id):
-        url = f"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token=123"
-        response = requests.get(url)
-        return response.json()
-    
+def scrape_tweet_v2(url: str):
     try:
         tweet_id = get_tweet_id(url)
         data = get_tweet_result(tweet_id)
-        match_date = re.search("r'(\d{1,2}:\d{2}(?: [AP]M)?) · (\d{1,2} \b\w+\b \d{2})'", data['created_at'])
-        if match_date:
-            time_str, date_str = match_date.groups()
-            created_at = parse_date_time(date_str, time_str)
-            data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
+        created_at_str = extract_twitter_datetime(data['created_at'])
+        if created_at_str:
+            data['created_at'] = created_at_str
         return data
+    except ContentDecodingError:
+        raise HTTPException(status_code=406, detail="Cannot get tweet ID from URL")
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Cannot get response from Twitter")
     except Exception as e:
         logger_twitter.error(e)
-        raise HTTPException(
-            status_code=500,
-            detail="unknown error!"
-        )
+        raise HTTPException(status_code=500, detail="Unknown error!")
 
 @scraping_router.get("/api/v1/scrape-tweet")
-async def scrape_tweet(url: str):
+async def scrape_tweet_v1(url: str):
     _xhr_calls = []
-
-    async def parse_date_time(date_str, time_str):
-        try:
-            return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %I:%M %p')
-        except ValueError:
-            return datetime.strptime(f'{date_str} {time_str}', '%d %b %y %H:%M')
-
-    def transform_url(url: str) -> str:
-        match = re.search(r'/status/(\d+)', url)
-        if match:
-            tweet_id = match.group(1)
-            return f"https://platform.twitter.com/embed/Tweet.html?id={tweet_id}"
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="cannot get tweet ID!"
-            )
-
-    url_transformed = transform_url(url)
-
-    async def intercept_response(response):
-        if response.request.resource_type == "xhr":
-            _xhr_calls.append(response)
-        return response
-
-    date_time_pattern = r'(\d{1,2}:\d{2}(?: [AP]M)?) · (\d{1,2} \b\w+\b \d{2})'
-
+    url_transformed = transform_tweet_url(url)
     try:
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch()
-            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-            page = await context.new_page()
-            page.on("response", intercept_response)
-            await page.goto(url_transformed)
-            await page.wait_for_selector("[role='article']",timeout=3000)
-
-            tweet_calls = [f for f in _xhr_calls if "tweet-result" in f.url][0]
-            data = await tweet_calls.json()
-            match = re.search(date_time_pattern, data['created_at'])
-            if match:
-                time_str, date_str = match.groups()
-                created_at = await parse_date_time(date_str, time_str)
-                data['created_at'] = created_at.strftime('%Y-%m-%d %H:%M:%S') #TODO debug this to +7 hours
-            
-            return data
+        data = await fetch_tweet_data(url_transformed, _xhr_calls)
+        return data
+    except ContentDecodingError:
+        raise HTTPException(status_code=406, detail="Cannot get tweet ID from URL")
     except Exception as e:
         logger_twitter.error(e)
-        raise HTTPException(
-            status_code=500,
-            detail="unknown error!"
-        )
+        raise HTTPException(status_code=500, detail="Unknown error!")
+
 
 @scraping_router.get("/api/v1/scrape-ig")
-def scrape_ig(url: str):
-    parsed_url,shortcode=parse_url_ig(url)
-    session,cookie = ig_session_manager.get_next_session()
+def scrape_ig(url: str)->ResponseBody:
+    parsed_url, shortcode = parse_url_ig(url)
+    session, cookie = ig_session_manager.get_next_session()
     try:
-        response = requests.get(parsed_url,cookies=cookie)
-        # Parse the HTML content with BeautifulSoup
+        response = requests.get(parsed_url, cookies=cookie)
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        datatype_meta = soup.find('meta', attrs={'property': 'og:type'})
-        if datatype_meta:
-            data_type = datatype_meta.get('content')
-            if data_type=='profile':
-                raise HTTPException(
-                    status_code = 403,
-                    detail = 'The post is on a private user.'
-                )
-            else:
-                pass
-        else:
-            raise ContentDecodingError
+        data_type_meta = soup.find('meta', attrs={'property': 'og:type'})
+        if data_type_meta and data_type_meta.get('content') == 'profile':
+            raise HTTPException(status_code=403, detail='The post is on a private user.')
 
-        description_meta = soup.find('meta', attrs={'property': 'og:title'})
-        if description_meta:
-            description_content = description_meta.get('content')
-            # Regular expression pattern to match the username and the quoted text
-            pattern = r'^(.+) on Instagram: "(.*)"'
+        content = extract_instagram_data(soup)
+        username = extract_instagram_username(soup)
 
-            # Use re.search to find matches
-            match = re.search(pattern,description_content ,re.DOTALL)
-            if match:
-                quoted_text = match.group(2).strip()
-            else:
-                raise ContentDecodingError
-            
-            content = quoted_text
-        else:
-            raise ContentDecodingError
-    
-        user_meta = soup.find('meta', attrs={'name': 'twitter:title'})
-        if user_meta:
-            user_content = user_meta.get('content')
-            pattern = r"@(\w+)"
-            match = re.search(pattern, user_content)
-            if match:
-                username = match.group(1)
-            else:
-                logger_instagram.error('Cannot parse username')
-                username=""
-        else:
-            logger_instagram.error('Cannot parse username')
-            username=""
-        
-        output = {
-            "username":username,
-            "content":content,
-            "url":parsed_url
-        }
+        return ResponseBody(username=username,content=content,url=parsed_url)
 
-        return output
-    
     except ContentDecodingError:
         logger_instagram.error("Cannot scrape using bs4, use 3rd party app instead...")
         try:
-            post = instaloader.Post.from_shortcode(session.context, shortcode)
-            output = {
-                "username":post.owner_username,
-                "content":post.caption,
-                "url":parsed_url
-            }
-            return output
+            return fetch_instagram_post(session, shortcode, parsed_url)
         except Exception as e:
             logger_instagram.error(e)
-            raise HTTPException(
-                status_code=500,
-                detail="unknown error!"
-            )
+            raise HTTPException(status_code=500, detail="Unknown error!")
 
 @scraping_router.get("/api/v1/scrape-tiktok")
-def scrape_tiktok(url: str):
+def scrape_tiktok(url: str)->ResponseBody:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
     }
-    url = url.replace("photo","video")
+    url = url.replace("photo", "video")
     response = requests.get(url, headers=headers)
-    
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Parse the HTML content with BeautifulSoup
-        soup = BeautifulSoup(response.text, 'html.parser')
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to retrieve the page")
 
-        # Look for script tags that might contain a JSON object
-        # This is a guess; you'll need to find the correct script tag on the actual page
-        script_tags = soup.find_all('script', {'type': 'application/json'})
-        # Iterate through the script tags to find the one containing the video details
-        for tag in script_tags:
-            # Try to parse the content of the script tag as JSON
-            try:
-                data = json.loads(tag.string)
-                # If the data has the key you're looking for, print it
-                if "webapp.video-detail" in str(data):
-                    # print(data)
-                    data_json=data
-                    break
-            except json.JSONDecodeError:
-                continue  # If JSON decoding fails, move on to the next tag
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to retrieve the page"
-        )
-
-    try:
-        data_parsed=data_json["__DEFAULT_SCOPE__"]["seo.abtest"]
-
-        data_desc=data_json["__DEFAULT_SCOPE__"]["webapp.video-detail"]
-
-        tiktok_address=data_parsed["canonical"]
-        tiktok_handle=data_desc["itemInfo"]["itemStruct"]["author"]["nickname"]
-        tiktok_caption=data_desc["itemInfo"]["itemStruct"]["desc"]
-        output={
-            "username":tiktok_handle,
-            "content":tiktok_caption,
-            "url":tiktok_address
-        }
-        return output
-    except:
-        raise HTTPException(
-            status_code=500,
-            detail="Cannot find element!"
-        )
-
-@scraping_router.get("/api/v1/convert-tiktok-url")
-def convert_tiktok_url(url:str):
-    # Make a request to get the HTML content
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-    }
-    response = requests.get(url, headers=headers)
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Parse the HTML content with BeautifulSoup
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # Look for script tags that might contain a JSON object
-        script_tags = soup.find_all('script', {'type': 'application/json'})
-
-        # Iterate through the script tags to find the one containing the video details
-        for tag in script_tags:
-            # Try to parse the content of the script tag as JSON
-            try:
-                data = json.loads(tag.string)
-                if "seo.abtest" in str(data):
-                    # print(data)
-                    data_json=data
-                    break
-            except json.JSONDecodeError:
-                continue  # If JSON decoding fails, move on to the next tag
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to retrieve the page"
-        )
-
-    try:
-        data_parsed=data_json["__DEFAULT_SCOPE__"]["seo.abtest"]
-        tiktok_address=data_parsed["canonical"]
-        return {
-            "url":tiktok_address,
-        }
-    except:
-        raise HTTPException(
-            status_code=500,
-            detail="Cannot find element!"
-        )
+    soup = BeautifulSoup(response.text, 'html.parser')
+    script_tags = soup.find_all('script', {'type': 'application/json'})
+    for tag in script_tags:
+        try:
+            data = json.loads(tag.string)
+            if "webapp.video-detail" in str(data):
+                data_parsed = data["__DEFAULT_SCOPE__"]["seo.abtest"]
+                data_desc = data["__DEFAULT_SCOPE__"]["webapp.video-detail"]
+                return ResponseBody(
+                    username=data_desc["itemInfo"]["itemStruct"]["author"]["nickname"],
+                    content=data_desc["itemInfo"]["itemStruct"]["desc"],
+                    url=data_parsed["canonical"]
+                )
+        except json.JSONDecodeError:
+            continue
+    raise HTTPException(status_code=500, detail="Cannot find element!")
 
 @scraping_router.get("/api/v1/scrape-youtube")
-def scrape_youtube(url: str):
-    # Make a request to get the HTML content
+def scrape_youtube(url: str)->ResponseBody:
     response = requests.get(url)
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to retrieve the page")
 
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Parse the HTML content with BeautifulSoup
-        soup = BeautifulSoup(response.text, 'html.parser')
+    soup = BeautifulSoup(response.text, 'html.parser')
+    youtube_title = re.sub(r'\s-\sYouTube$', '', soup.find("title").text)
+    youtube_handle = soup.find("link", {"itemprop": "name"})["content"]
 
-        youtube_title=soup.find("title").text
-        youtube_title = re.sub(r'\s-\sYouTube$', '', youtube_title)
-        youtube_handle=soup.find("link", {"itemprop": "name"})["content"]
-        output={
-            "username":youtube_handle,
-            "content":youtube_title,
-            "url":url
-        }
+    return ResponseBody(username=youtube_handle,content=youtube_title,url=url)
 
-    return output
 
-@scraping_router.get("/api/v1/scrape-tripadvisor")
-async def scrape_ta(url: str):
-    parsed_url = urlparse(url)
-    if parsed_url.netloc.endswith(".com"):
-        new_netloc = parsed_url.netloc.replace(".com", ".co.id")
-        url = urlunparse(parsed_url._replace(netloc=new_netloc))
-    about = {}
-    async with async_playwright() as pw:
-        browser = await pw.firefox.launch(headless=False)
-        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await context.new_page()
-        # page.on("response", intercept_response)
-        await page.goto(url)
-        await page.wait_for_selector("[data-test-target='restaurant-detail-info']",timeout=10000)
-        page_content = await page.content()
-        soup = BeautifulSoup(page_content, 'html.parser')
-        restaurant_detail = soup.find("div",attrs={"data-test-target":"restaurant-detail-info"})
-        title = restaurant_detail.find("h1").get_text()
-        review_cards = soup.findAll("div",attrs={"class":"reviewSelector"})
-        reviews=[]
-        for review_card in review_cards:
-            review = review_card.find("p",attrs={"class":"partial_entry"})
-            reviews.append(review.get_text())
-        
-        rating_and_reviews_section = soup.find(text="Penilaian dan ulasan")
-        if rating_and_reviews_section:
-            rating_and_reviews = rating_and_reviews_section.find_previous('div').find_previous('div').get_text(separator=" ")
-            rating = rating_and_reviews.split("ulasan")[1].strip().split(" ")[0]
-            n_reviews = rating_and_reviews.split("ulasan")[1].strip().split("ulasan")[0].split(" ")[2]
-            # Regex pattern to find the numbers before and after "dari"
-            pattern = r"(\d+(?:\.\d+)?)\s+dari\s+(\d+(?:\.\d+)?)"
-            match = re.search(pattern, rating_and_reviews)
-            if match:
-                ranking = match.group(1)
-                of_total = match.group(2)
-        else:
-            rating_and_reviews = "No rating and reviews section found"
-        
-        about["reviews"] = reviews
-        output = {
-            "rating":rating,
-            "n_reviews":n_reviews,
-            "ranking":ranking,
-            "of_total":of_total,
-            "title":title,
-            "about":about,
-            "url":url
-        }
-        return output
-
-@scraping_router.get("/api/v1/convert-facebook-url")
-async def convert_fb_url(url: str):
-    parsed_url = urlparse(url)
-    
-    # Check if the URL has a video ID directly in its query
-    if "v=" in parsed_url.query:
-        video_id = re.search(r"v=(\d+)", url).group(1)
-        return {"url": f"https://www.facebook.com/reel/{video_id}"}
-    
-    try:
-        try:
-            # Use API to resolve the final URL if not directly available
-            api_url = f"https://api.redirect-checker.net/?url={url}&timeout=5&maxhops=10&format=json"
-            response = requests.get(api_url).json()
-            redirect_url_raw = response["data"][0]["response"]["info"]["redirect_url"]
-            logger_facebook.info(redirect_url_raw)
-            # Process the redirect URL to extract or clean it
-            if not redirect_url_raw.strip():
-                redirect_url_clean = url
-            else:
-                redirect_url_clean = redirect_url_raw
-            
-            # Clean up the URL to remove query and fragment parts if not a PHP link
-            parsed_url = urlparse(redirect_url_clean)
-            if "php" not in redirect_url_clean:
-                final_url = urlunparse(parsed_url._replace(query='', fragment=''))
-            else:
-                final_url = redirect_url_clean
-            
-            if "login" in final_url:
-                raise TooManyRedirects
-            return {"url": final_url}
-        except TooManyRedirects:
-            logger_facebook.error("use other converting method...")
-            gen=get_posts(
-                post_urls=[url],
-                cookies='./cookies/facebook/facebook_cookies.json'
-
-            )
-            post = next(gen)
-            return {"url":post["post_url"]}
-        
-    except Exception as e:
-        logger_facebook.error(e)
-        raise HTTPException(
-            status_code=500,
-            detail="unknown error!"
-        )
-    
 @scraping_router.get("/api/v1/scrape-facebook")
-async def scrape_facebook(url: str):
+async def scrape_facebook(url: str)->ResponseBody:
     try:
         try:
             headers = {
@@ -448,13 +153,7 @@ async def scrape_facebook(url: str):
                 username = username_content.split("|")[1].strip()
                 content = username_content.split("|")[0].strip()
 
-            output = {
-                "username":username,
-                "content":content,
-                "url":url
-            }
-
-            return output
+            return ResponseBody(username=username,content=content,url=url)
         
         except Exception:
             logger_facebook.error(f"Cannot scrape using bs4, use 3rd party method...")
@@ -464,12 +163,8 @@ async def scrape_facebook(url: str):
 
             )
             post = next(gen)
-            output = {
-                "username":post["username"],
-                "content":post["text"],
-                "url":url
-            }
-            return output
+
+            return ResponseBody(username=post["username"],content=post["text"],url=url)
         
     except Exception as e:
         logger_facebook.error(e)
