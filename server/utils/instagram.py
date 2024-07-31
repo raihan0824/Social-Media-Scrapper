@@ -69,7 +69,7 @@ def extract_instagram_username(soup):
     user_meta = soup.find('meta', attrs={'name': 'twitter:title'})
     if user_meta:
         user_content = user_meta.get('content')
-        match = re.search(r"@(\w+)", user_content)
+        match = re.search(r"@(\w.*).+", user_content)
         if match:
             return match.group(1)
     logger_instagram.error('Cannot parse username')
