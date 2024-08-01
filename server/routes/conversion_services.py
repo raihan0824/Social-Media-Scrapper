@@ -81,7 +81,7 @@ def convert_fb_url(url: str)->ConversionBody:
             
             # Clean up the URL to remove query and fragment parts if not a PHP link
             parsed_url = urlparse(redirect_url_clean)
-            if "php" not in redirect_url_clean:
+            if "php" not in redirect_url_clean and "fbid" not in redirect_url_clean:
                 final_url = urlunparse(parsed_url._replace(query='', fragment=''))
             else:
                 final_url = redirect_url_clean
