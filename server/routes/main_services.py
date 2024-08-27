@@ -11,6 +11,7 @@ from facebook_scraper import get_posts
 
 from server.utils.instagram import IGSessionManager,parse_url_ig,extract_instagram_data,extract_instagram_username,fetch_instagram_post
 from server.utils.twitter import get_tweet_id, get_tweet_result, extract_twitter_datetime,fetch_tweet_data,transform_tweet_url
+from server.utils.google_image import google_get_image
 
 from schema.response import ResponseBody
 
@@ -172,3 +173,9 @@ async def scrape_facebook(url: str)->ResponseBody:
             status_code=500,
             detail="unknown error!"
         )
+
+@scraping_router.get("/api/v1/scrape-image-google")
+def scrape_image_google(query: str, num_images: int):
+    urls = google_get_image(query, num_images)
+
+    return urls
