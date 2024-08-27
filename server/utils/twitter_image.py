@@ -1,8 +1,8 @@
 import asyncio
+import nest_asyncio
 from datetime import datetime
 from urllib.parse import quote
 import json
-import nest_asyncio
 from playwright.async_api import async_playwright
 import logging
 import dotenv
@@ -11,7 +11,7 @@ import os
 # Scraping Functions
 
 dotenv.load_dotenv('.env')
-X_COOKIE_PATH = 'cookies/twitter/twitter_cookies.json'
+X_COOKIE_PATH = './cookies/twitter/x.com.cookies.json'
 
 BASE_URL = 'https://x.com'
 
