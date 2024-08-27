@@ -1,120 +1,84 @@
-from bs4 import BeautifulSoup
+import asyncio
+from playwright.async_api import async_playwright
 from urllib.parse import quote_plus
-import requests
-import time
-from selenium.webdriver.common.action_chains import ActionChains
-
-
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
 import random
-import logging
-import decorator
+from bs4 import BeautifulSoup
 
-BASE_URL = 'https://images.google.com/'
-CHROMEDRIVER=''
+BASE_URL = "https://www.google.com"
 
-def retry(howmany, **kwargs):
-    timewait=kwargs.get('timewait', 1.0) # seconds
-    timeout = kwargs.get('timeout', 0.0) # seconds
-    raise_error = kwargs.get('raise_error', True)
-    time.sleep(timewait)
-    @decorator.decorator
-    def tryIt(func, *fargs, **fkwargs):
-        for trial in range(howmany):
-            try:
-                return func(*fargs, **fkwargs)
-            except Exception as e:
-                error_msg = f'Error in {func.__name__} function at {trial+1} trial : {e}'
-                if timeout is not None: time.sleep(timeout)
-        if raise_error:
-            raise Exception(f'{error_msg}')
-    return tryIt
+async def create_browser_context():
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch(headless=True)
+    context = await browser.new_context()
+    return context, browser
 
-def create_driver():
-    chrome_options = Options()
-    chrome_options.add_argument('--headless') 
-    if CHROMEDRIVER:
-        service = Service(executable=CHROMEDRIVER)
-        driver = webdriver.Chrome(options=chrome_options,service=service)
-    else:
-        driver = webdriver.Chrome(options=chrome_options)
-    driver.maximize_window()
-    return driver
-
-def query_to_url(query):
+async def query_to_url(query):
     q = quote_plus(query.strip())
     return f'https://www.google.com/search?q={q}&udm=2'
 
-def extract_image_urls(driver, url, doc_ids):
-
+async def extract_image_urls(page, doc_ids):
     img_urls = []
     for doc_id in doc_ids:
-        # Open Url
-        driver.get(f'{BASE_URL}{doc_id}')
+        # Open URL
+        await page.goto(f'{BASE_URL}{doc_id}')
+        await page.wait_for_timeout(1000)
 
         # Get img_url
-        time.sleep(1)
-        img = WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH,'//*[@id="imp"]/div[1]/div[1]/div[2]/div/div[2]/c-wiz/div/div[2]/div/a/img[1]')))
-        img_urls.append(img.get_attribute('src'))
-        
+        img = await page.wait_for_selector('//*[@id="imp"]/div[1]/div[1]/div[2]/div/div[2]/c-wiz/div/div[2]/div/a/img[1]', timeout=2000)
+        img_urls.append(await img.get_attribute('src'))
+
     return img_urls
 
-def hover_randomly(driver, n):
-    hover_1 = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, '//*[@id="rso"]/div/div/div[1]/div/div/div[1]')))
-    ActionChains(driver).move_to_element(hover_1).perform()
+async def hover_randomly(page, n):
+    hover_1 = await page.wait_for_selector('//*[@id="rso"]/div/div/div[1]/div/div/div[1]', timeout=5000)
+    await hover_1.hover()
+
     for _ in range(5):
-        hover = WebDriverWait(driver, 1).until(EC.presence_of_element_located((By.XPATH, f'//*[@id="rso"]/div/div/div[1]/div/div/div[{random.randint(2,10)}]')))
-        ActionChains(driver).move_to_element(hover).perform()
-    if n>10:
-        driver.execute_script('window.scrollBy(0, 1000)')
-        for _ in range(5):
-            hover = WebDriverWait(driver, 1).until(EC.presence_of_element_located((By.XPATH, f'//*[@id="rso"]/div/div/div[1]/div/div/div[{random.randint(10,20)}]')))
-            ActionChains(driver).move_to_element(hover).perform()
-    if n>20:
-        driver.execute_script('window.scrollBy(0, 1000)')
-        for _ in range(5):
-            hover = WebDriverWait(driver, 1).until(EC.presence_of_element_located((By.XPATH, f'//*[@id="rso"]/div/div/div[1]/div/div/div[{random.randint(20,30)}]')))
-            ActionChains(driver).move_to_element(hover).perform()
+        hover = await page.wait_for_selector(f'//*[@id="rso"]/div/div/div[1]/div/div/div[{random.randint(2,10)}]', timeout=1000)
+        await hover.hover()
 
-@retry(3)
-def google_get_image(query, n: int=1):
-    # Open URL
-    url = query_to_url(query)
-    driver = create_driver()
-    driver.get(url)
-    time.sleep(3)
-    hover_randomly(driver, n)
+    if n > 10:
+        await page.evaluate('window.scrollBy(0, 1000)')
+        for _ in range(5):
+            hover = await page.wait_for_selector(f'//*[@id="rso"]/div/div/div[1]/div/div/div[{random.randint(10,20)}]', timeout=1000)
+            await hover.hover()
+
+    if n > 20:
+        await page.evaluate('window.scrollBy(0, 1000)')
+        for _ in range(5):
+            hover = await page.wait_for_selector(f'//*[@id="rso"]/div/div/div[1]/div/div/div[{random.randint(20,30)}]', timeout=1000)
+            await hover.hover()
+
+async def google_get_image(query, n: int = 1):
+    context, browser = await create_browser_context()
+    page = await context.new_page()
+
+    try:
+        # Open URL
+        url = await query_to_url(query)
+        await page.goto(url)
+        await page.wait_for_timeout(3000)
+        await hover_randomly(page, n)
+
+        # Get n random image ids
+        html = await page.content()
+        soup = BeautifulSoup(html, 'html.parser')
+        doc_ids = [tag.get('href', '') for tag in soup.find_all('a') if 'imgres' in tag.get('href', '')]
+        doc_ids = list(set(doc_ids))
         
-    # Get n random image ids
-    html = driver.page_source
-    soup = BeautifulSoup(html, 'html.parser')
-    doc_ids = [tag.get('href', '') for tag in soup.find_all('a') if 'imgres' in tag.get('href', '')]
-    doc_ids = list(set(doc_ids))
-    # print(f'Captured doc_ids: {len(doc_ids)}')
-    if not doc_ids:
-        raise ValueError("No captured images")
-    choosen_ids = random.choices(doc_ids, k=n)
+        if not doc_ids:
+            raise ValueError("No captured images")
+        chosen_ids = random.choices(doc_ids, k=n)
 
-    # Get image url
-    img_urls = extract_image_urls(driver, url, choosen_ids)
+        # Get image URLs
+        img_urls = await extract_image_urls(page, chosen_ids)
+    finally:
+        await browser.close()
+
     return img_urls
 
+# Example usage
+if __name__=='__main__':
+    result = asyncio.run(google_get_image("tom & jerry", n=5))
 
-# Tester
-if __name__ == '__main__':
-    query = 'tom & jerry'
-    url = google_get_image(query)
-    print(url)
-    url = google_get_image(query)
-    print(url)
-    url = google_get_image(query)
-    print(url)
-    url = google_get_image(query)
-    print(url)
-    url = google_get_image(query)
-    print(url)
+    print(result)
