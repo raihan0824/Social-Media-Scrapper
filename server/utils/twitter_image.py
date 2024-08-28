@@ -1,5 +1,5 @@
 import asyncio
-import nest_asyncio
+# import nest_asyncio
 from datetime import datetime
 from urllib.parse import quote
 import json
@@ -15,7 +15,7 @@ X_COOKIE_PATH = './cookies/twitter/x.com.cookies.json'
 
 BASE_URL = 'https://x.com'
 
-nest_asyncio.apply()
+# nest_asyncio.apply()
 logger = logging.getLogger(__name__)
 
 async def scrape_search_result(url, _xhr_calls):
