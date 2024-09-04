@@ -1,7 +1,7 @@
 import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from server.routes import conversion_services, main_services
+from server.routes import conversion_services, main_services, image_services
 import uvicorn
 import os
 import logging
@@ -20,6 +20,7 @@ app.add_middleware(
 )
 app.include_router(main_services.scraping_router)
 app.include_router(conversion_services.conversion_router)
+app.include_router(image_services.image_router)
 
 @app.get('/')
 def ping():
